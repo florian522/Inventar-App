@@ -997,11 +997,14 @@ function renderForm(id, params) {
           </div>
         </div>
         <div class="status" id="isbn-status"></div>
-        <button class="btn small cover-btn" id="cover-ai">${ICON.camera}Cover fotografieren</button>
+        <div class="cover-row">
+          <button class="btn small cover-btn" data-side="front">${ICON.camera}Vorderseite</button>
+          <button class="btn small cover-btn" data-side="back">${ICON.camera}Rückseite</button>
+        </div>
         <div class="status" id="cover-status"></div>
       </div>` : draft.category === 'spiel' ? `
       <div class="panel isbn">
-        <button class="btn small cover-btn" id="cover-ai">${ICON.camera}Schachtel fotografieren und erkennen</button>
+        <button class="btn small cover-btn" data-side="front">${ICON.camera}Schachtel fotografieren und erkennen</button>
         <div class="status" id="cover-status"></div>
       </div>` : ''}
 
@@ -1066,11 +1069,11 @@ function renderForm(id, params) {
     }));
   }
   $('#num-scan').addEventListener('click', () => scanSticker());
-  const coverBtn = $('#cover-ai');
-  if (coverBtn) coverBtn.addEventListener('click', () => {
+  document.querySelectorAll('.cover-btn[data-side]').forEach(b => b.addEventListener('click', () => {
     if (!window.PREVIEW && !aiKeyNow()) { const st = $('#cover-status'); st.className = 'status err'; st.textContent = 'Dafür brauchst du einen API-Schlüssel unter Einstellungen → KI-Suche.'; return; }
+    coverSide = b.dataset.side;
     $('#cover-input').click();
-  });
+  }));
   $('#photo-take').addEventListener('click', () => $('#photo-input').click());
   const del = $('#photo-del');
   if (del) del.addEventListener('click', () => { delete draft.photo; renderForm(id, params); });
@@ -1193,7 +1196,15 @@ async function resizeImage(file, max = 1000) {
   return c.toDataURL('image/jpeg', 0.8);
 }
 
-function coverPrompt(cat) {
+let coverSide = 'front';
+
+function coverPrompt(cat, side) {
+  if (cat !== 'spiel' && side === 'back') return `Das Foto zeigt die Rückseite eines Buches, oft ein deutsches Kinder- oder Fachbuch. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer.
+- beschreibung: Gib den Klappentext bzw. die Inhaltsbeschreibung wieder, möglichst wörtlich, bei langen Texten auf höchstens 5 Sätze gekürzt. Lass Werbung, Pressestimmen, Preise und Altersangaben weg.
+- isbn: die ISBN, meist über oder unter dem Strichcode (beginnt mit 978 oder 979), ohne Bindestriche.
+- titel, autor, verlag, jahr: nur wenn sie auf der Rückseite stehen.
+Antworte nur mit JSON, ohne weiteren Text:
+{"titel":"","autor":"","verlag":"","jahr":"","beschreibung":"","isbn":""}`;
   if (cat === 'spiel') return `Das Foto zeigt die Schachtel eines Gesellschaftsspiels. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer. Eine kurze Beschreibung (höchstens 2 Sätze) nur, wenn sie auf der Schachtel steht oder du das Spiel sicher kennst.
 Antworte nur mit JSON, ohne weiteren Text:
 {"titel":"","verlag":"","spieler":"z. B. 2–4","alter":"nur Zahl","dauer":"Minuten als Zahl","beschreibung":""}`;
@@ -1202,17 +1213,18 @@ Antworte nur mit JSON, ohne weiteren Text:
 {"titel":"","autor":"","verlag":"","jahr":"","beschreibung":"","isbn":""}`;
 }
 
-async function coverRecognize(file) {
+async function coverRecognize(file, side) {
   const status = $('#cover-status');
   const setStatus = (cls, txt) => { const el = $('#cover-status'); if (el) { el.className = 'status ' + cls; el.textContent = txt; } };
   let img;
   try { img = await resizeImage(file, 1000); } catch { setStatus('err', 'Das Foto konnte nicht gelesen werden.'); return; }
-  draft.photo = img;
+  const back = side === 'back' && draft.category !== 'spiel';
+  if (!back) draft.photo = img;   // Nur die Vorderseite wird zum Cover
   if (window.PREVIEW) { rerenderForm(); setStatus('err', AI_ERRORS.preview); return; }
-  if (status) { status.className = 'status'; status.textContent = 'Lese das Cover …'; }
-  const btn = $('#cover-ai'); if (btn) btn.disabled = true;
+  if (status) { status.className = 'status'; status.textContent = back ? 'Lese die Rückseite …' : 'Lese das Cover …'; }
+  document.querySelectorAll('.cover-btn').forEach(b => { b.disabled = true; });
   try {
-    const r = await aiComplete(coverPrompt(draft.category), img);
+    const r = await aiComplete(coverPrompt(draft.category, back ? 'back' : 'front'), img);
     const map = draft.category === 'spiel'
       ? { titel: 'title', verlag: 'publisher', spieler: 'players', alter: 'age', dauer: 'duration', beschreibung: 'description' }
       : { titel: 'title', autor: 'author', verlag: 'publisher', jahr: 'year', beschreibung: 'description' };
@@ -1221,12 +1233,16 @@ async function coverRecognize(file) {
       const v = r && r[from] != null ? String(r[from]).trim() : '';
       if (v && !String(draft[to] || '').trim()) { draft[to] = v; n++; }
     }
+    let isbnNew = false;
     if (draft.category === 'buch' && r && r.isbn && !draft.isbn) {
       const c = cleanIsbn(r.isbn);
-      if (validIsbn(c)) draft.isbn = toIsbn13(c);
+      if (validIsbn(c)) { draft.isbn = toIsbn13(c); isbnNew = true; n++; }
     }
     rerenderForm();
-    setStatus(n ? 'ok' : 'err', n ? 'Vom Cover übernommen. Bitte kurz prüfen.' : 'Auf dem Foto war nichts Lesbares. Versuch es mit der Vorderseite und ohne Spiegelung.');
+    const hint = back ? (draft.photo ? '' : ' Für das Cover fotografierst du noch die Vorderseite.') : (draft.description ? '' : ' Für Inhalt und ISBN kannst du noch die Rückseite fotografieren.');
+    setStatus(n ? 'ok' : 'err', n
+      ? `${back ? 'Von der Rückseite' : 'Vom Cover'} übernommen${isbnNew ? ', inklusive ISBN' : ''}. Bitte kurz prüfen.${hint}`
+      : 'Auf dem Foto war nichts Lesbares. Versuch es noch einmal ohne Spiegelung.');
   } catch (e) {
     rerenderForm();
     setStatus('err', AI_ERRORS[e && e.code] || 'Die Erkennung hat nicht geklappt. Versuch es noch einmal.');
@@ -1242,7 +1258,7 @@ function rerenderForm() {
 $('#cover-input').addEventListener('change', e => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';
-  if (file && draft) coverRecognize(file);
+  if (file && draft) coverRecognize(file, coverSide);
 });
 
 /* ---------- Ansicht: Einstellungen ---------- */

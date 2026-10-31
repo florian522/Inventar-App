@@ -1,5 +1,5 @@
 // Service Worker: hält die App offline verfügbar und merkt sich Cover-Bilder.
-const VERSION = 'inventar-v14';
+const VERSION = 'inventar-v15';
 const SHELL = ['./', './index.html', './app.js', './html5-qrcode.min.js', './pocketbase.umd.js', './manifest.webmanifest',
   './icon-192.png', './logo.png', './logo-dark.png', './icon-512.png', './apple-touch-icon.png'];
 const COVERS = 'inventar-covers';
