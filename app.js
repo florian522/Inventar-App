@@ -334,8 +334,9 @@ function initials(t) {
 
 function coverHtml(it, cls) {
   const square = it.category !== 'buch' ? ' square' : '';
-  const src = it.photo || it.cover || it.coverAlt;
-  const alt = it.photo ? (it.cover || '') : (it.cover ? (it.coverAlt || '') : '');
+  const chain = [it.photo, it.cover, ...String(it.coverAlt || '').split('|')].filter(Boolean);
+  const src = chain[0];
+  const alt = chain.slice(1).join('|');
   if (!src) return `<div class="${cls}${square}">${initials(it.title)}</div>`;
   return `<div class="${cls}${square}" data-initial="${initials(it.title)}"><img src="${esc(src)}" ${alt ? `data-alt="${esc(alt)}"` : ''} alt="" loading="lazy" referrerpolicy="no-referrer"></div>`;
 }
@@ -344,7 +345,11 @@ function coverHtml(it, cls) {
 document.addEventListener('error', e => {
   const img = e.target;
   if (!(img instanceof HTMLImageElement) || !img.closest('.thumb, .cover-lg')) return;
-  if (img.dataset.alt) { const a = img.dataset.alt; delete img.dataset.alt; img.src = a; return; }
+  if (img.dataset.alt) {
+    const [next, ...rest] = img.dataset.alt.split('|');
+    if (rest.length) img.dataset.alt = rest.join('|'); else delete img.dataset.alt;
+    img.src = next; return;
+  }
   const box = img.parentElement;
   box.textContent = box.dataset.initial ? new DOMParser().parseFromString(box.dataset.initial, 'text/html').body.textContent : '?';
 }, true);
@@ -447,18 +452,55 @@ async function lookupOpenLibrary(isbn) {
   };
 }
 
-async function lookupIsbn(isbn) {
-  const [g, o] = await Promise.allSettled([lookupGoogle(isbn), lookupOpenLibrary(isbn)]);
-  if (g.status === 'rejected' && o.status === 'rejected') throw new Error('offline');
-  const G = g.status === 'fulfilled' ? g.value : null;
-  const O = o.status === 'fulfilled' ? o.value : null;
-  if (!G && !O) return null;
-  const pick = k => (G && G[k]) || (O && O[k]) || '';
-  const covers = [O && O.cover, G && G.cover, `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`].filter(Boolean);
+function jsonp(url, ms = 9000) {
+  return new Promise((res, rej) => {
+    const cb = '__jp' + Math.random().toString(36).slice(2);
+    const sc = document.createElement('script');
+    const done = () => { clearTimeout(t); delete window[cb]; sc.remove(); };
+    const t = setTimeout(() => { done(); rej(new Error('timeout')); }, ms);
+    window[cb] = d => { done(); res(d); };
+    sc.onerror = () => { done(); rej(new Error('jsonp')); };
+    sc.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cb;
+    document.head.appendChild(sc);
+  });
+}
+
+const flipName = n => /,/.test(n) ? n.split(',').map(x => x.trim()).reverse().join(' ') : n;
+
+// Deutscher Bibliotheksverbund (hbz) über lobid.org: findet auch viele Kinderbücher
+async function lookupLobid(isbn) {
+  const d = await jsonp(`https://lobid.org/resources/search?q=isbn:${isbn}&format=json&size=1`);
+  const b = d && d.member && d.member[0];
+  if (!b) return null;
+  const contrib = (b.contribution || []).filter(c => c.agent && c.agent.label);
+  const authors = contrib.filter(c => /Autor|Verfasser/i.test((c.role && c.role.label) || ''));
+  const pub = (b.publication || [])[0] || {};
+  const other = Array.isArray(b.otherTitleInformation) ? b.otherTitleInformation[0] : '';
   return {
-    title: pick('title'), author: pick('author'), year: pick('year'), publisher: pick('publisher'),
+    title: [b.title, other].filter(Boolean).join(' – '),
+    author: (authors.length ? authors : contrib.slice(0, 2)).map(c => flipName(c.agent.label)).join(', '),
+    year: year(pub.startDate),
+    publisher: (pub.publishedBy || []).join(', '),
+    pages: ((String(b.extent || '').match(/(\d+)\]?\s*(S\.|Seiten|ungezählte)/) || [])[1]) || '',
+    description: '',
+    cover: '',
+  };
+}
+
+async function lookupIsbn(isbn) {
+  const res = await Promise.allSettled([lookupGoogle(isbn), lookupLobid(isbn), lookupOpenLibrary(isbn)]);
+  if (res.every(r => r.status === 'rejected')) throw new Error('offline');
+  const [G, L, O] = res.map(r => (r.status === 'fulfilled' ? r.value : null));
+  if (!G && !L && !O) return null;
+  const pick = (k, order = [G, L, O]) => { for (const x of order) if (x && x[k]) return x[k]; return ''; };
+  const covers = [O && O.cover, G && G.cover,
+    `https://portal.dnb.de/opac/mvb/cover?isbn=${isbn}`,
+    `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`].filter(Boolean);
+  return {
+    title: pick('title'), author: pick('author'),
+    year: pick('year', [L, G, O]), publisher: pick('publisher', [L, G, O]),
     description: pick('description'), pages: pick('pages'),
-    cover: covers[0], coverAlt: covers[1] || '',
+    cover: covers[0], coverAlt: covers.slice(1).join('|'),
   };
 }
 
