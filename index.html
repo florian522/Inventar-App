@@ -200,6 +200,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .status { font-size: 14px; margin-top: 8px; min-height: 1.2em; color: var(--muted); }
 .status.ok { color: var(--green); }
 .status.err { color: var(--danger); }
+.cover-btn { width: 100%; margin-top: 10px; justify-content: center; }
+.panel.isbn .cover-btn:first-child { margin-top: 0; }
 .photo-row { display: flex; gap: 14px; align-items: center; }
 .photo-row .cover-lg { width: 72px; font-size: 24px; box-shadow: none; }
 .photo-row .btns { display: flex; flex-direction: column; gap: 8px; }
@@ -271,6 +273,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 </div>
 <div id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+<input type="file" id="cover-input" accept="image/*" capture="environment" hidden>
 <input type="file" id="import-input" accept="application/json,.json" hidden>
 
 <script src="html5-qrcode.min.js"></script>

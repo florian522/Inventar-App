@@ -24,6 +24,7 @@ const ICON = {
   scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M14 8v8M17 8v8"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
   spark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
@@ -672,18 +673,26 @@ async function aiSearch(query) {
     if (!sample) throw { code: 'unavailable' };
     return sample.json(prompt, { modelTier: 'quick' });
   }
+  return aiComplete(aiPrompt(query, AI_PROVIDERS[ai.provider].budget));
+}
+
+// Schickt eine Anfrage (optional mit Foto) an den gewählten Anbieter und liefert das JSON der Antwort
+async function aiComplete(prompt, image) {
   const key = aiKeyNow();
   if (!key) throw { code: 'nokey' };
   if (!navigator.onLine) throw { code: 'offline' };
   const P = AI_PROVIDERS[ai.provider];
-  const prompt = aiPrompt(query, P.budget);
+  const oaContent = image ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }] : prompt;
+  const anContent = image
+    ? [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: image.split(',')[1] } }, { type: 'text', text: prompt }]
+    : prompt;
   let r;
   try {
     r = ai.provider === 'openai'
       ? await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-          body: JSON.stringify({ model: P.model, max_completion_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
+          body: JSON.stringify({ model: P.model, max_completion_tokens: 4000, messages: [{ role: 'user', content: oaContent }] }),
         })
       : await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
@@ -693,7 +702,7 @@ async function aiSearch(query) {
             'anthropic-version': '2023-06-01',
             'anthropic-dangerous-direct-browser-access': 'true',
           },
-          body: JSON.stringify({ model: P.model, max_tokens: 800, messages: [{ role: 'user', content: prompt }] }),
+          body: JSON.stringify({ model: P.model, max_tokens: 1000, messages: [{ role: 'user', content: anContent }] }),
         });
   } catch { throw { code: 'offline' }; }
   if (!r.ok) throw { code: r.status === 401 ? 'badkey' : r.status === 429 ? 'rate_limited' : r.status === 402 ? 'credit' : 'http' };
@@ -714,6 +723,7 @@ const AI_ERRORS = {
   credit: 'Das Guthaben beim KI-Anbieter ist aufgebraucht.',
   not_granted: 'Die KI-Anfrage wurde nicht erlaubt.',
   unavailable: 'Die KI-Suche ist hier gerade nicht verfügbar.',
+  preview: 'Die Cover-Erkennung funktioniert in deiner eigenen App, nicht in dieser Vorschau.',
 };
 
 async function runAiSearch() {
@@ -987,6 +997,12 @@ function renderForm(id, params) {
           </div>
         </div>
         <div class="status" id="isbn-status"></div>
+        <button class="btn small cover-btn" id="cover-ai">${ICON.camera}Cover fotografieren</button>
+        <div class="status" id="cover-status"></div>
+      </div>` : draft.category === 'spiel' ? `
+      <div class="panel isbn">
+        <button class="btn small cover-btn" id="cover-ai">${ICON.camera}Schachtel fotografieren und erkennen</button>
+        <div class="status" id="cover-status"></div>
       </div>` : ''}
 
       <div class="panel">
@@ -1050,6 +1066,11 @@ function renderForm(id, params) {
     }));
   }
   $('#num-scan').addEventListener('click', () => scanSticker());
+  const coverBtn = $('#cover-ai');
+  if (coverBtn) coverBtn.addEventListener('click', () => {
+    if (!window.PREVIEW && !aiKeyNow()) { const st = $('#cover-status'); st.className = 'status err'; st.textContent = 'Dafür brauchst du einen API-Schlüssel unter Einstellungen → KI-Suche.'; return; }
+    $('#cover-input').click();
+  });
   $('#photo-take').addEventListener('click', () => $('#photo-input').click());
   const del = $('#photo-del');
   if (del) del.addEventListener('click', () => { delete draft.photo; renderForm(id, params); });
@@ -1159,6 +1180,69 @@ $('#photo-input').addEventListener('change', async e => {
   } catch {
     toast('Das Foto konnte nicht gelesen werden.');
   }
+});
+
+/* ---------- Cover-Erkennung ---------- */
+async function resizeImage(file, max = 1000) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k);
+  c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.8);
+}
+
+function coverPrompt(cat) {
+  if (cat === 'spiel') return `Das Foto zeigt die Schachtel eines Gesellschaftsspiels. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer. Eine kurze Beschreibung (höchstens 2 Sätze) nur, wenn sie auf der Schachtel steht oder du das Spiel sicher kennst.
+Antworte nur mit JSON, ohne weiteren Text:
+{"titel":"","verlag":"","spieler":"z. B. 2–4","alter":"nur Zahl","dauer":"Minuten als Zahl","beschreibung":""}`;
+  return `Das Foto zeigt das Cover (Vorder- oder Rückseite) eines Buches, oft ein deutsches Kinder- oder Fachbuch. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer. Bei mehreren Namen: Autor(en) zuerst, Illustrator nur, wenn kein Autor erkennbar ist. Eine kurze Inhaltsangabe (höchstens 3 Sätze) nur, wenn ein Klappentext lesbar ist oder du genau dieses Buch sicher kennst. Steht eine ISBN auf dem Foto, gib sie ohne Bindestriche an.
+Antworte nur mit JSON, ohne weiteren Text:
+{"titel":"","autor":"","verlag":"","jahr":"","beschreibung":"","isbn":""}`;
+}
+
+async function coverRecognize(file) {
+  const status = $('#cover-status');
+  const setStatus = (cls, txt) => { const el = $('#cover-status'); if (el) { el.className = 'status ' + cls; el.textContent = txt; } };
+  let img;
+  try { img = await resizeImage(file, 1000); } catch { setStatus('err', 'Das Foto konnte nicht gelesen werden.'); return; }
+  draft.photo = img;
+  if (window.PREVIEW) { rerenderForm(); setStatus('err', AI_ERRORS.preview); return; }
+  if (status) { status.className = 'status'; status.textContent = 'Lese das Cover …'; }
+  const btn = $('#cover-ai'); if (btn) btn.disabled = true;
+  try {
+    const r = await aiComplete(coverPrompt(draft.category), img);
+    const map = draft.category === 'spiel'
+      ? { titel: 'title', verlag: 'publisher', spieler: 'players', alter: 'age', dauer: 'duration', beschreibung: 'description' }
+      : { titel: 'title', autor: 'author', verlag: 'publisher', jahr: 'year', beschreibung: 'description' };
+    let n = 0;
+    for (const [from, to] of Object.entries(map)) {
+      const v = r && r[from] != null ? String(r[from]).trim() : '';
+      if (v && !String(draft[to] || '').trim()) { draft[to] = v; n++; }
+    }
+    if (draft.category === 'buch' && r && r.isbn && !draft.isbn) {
+      const c = cleanIsbn(r.isbn);
+      if (validIsbn(c)) draft.isbn = toIsbn13(c);
+    }
+    rerenderForm();
+    setStatus(n ? 'ok' : 'err', n ? 'Vom Cover übernommen. Bitte kurz prüfen.' : 'Auf dem Foto war nichts Lesbares. Versuch es mit der Vorderseite und ohne Spiegelung.');
+  } catch (e) {
+    rerenderForm();
+    setStatus('err', AI_ERRORS[e && e.code] || 'Die Erkennung hat nicht geklappt. Versuch es noch einmal.');
+  }
+}
+
+function rerenderForm() {
+  const params = new URLSearchParams((location.hash.split('?')[1]) || '');
+  const id = location.hash.startsWith('#/edit/') ? location.hash.split('/')[2].split('?')[0] : null;
+  renderForm(id, params);
+}
+
+$('#cover-input').addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (file && draft) coverRecognize(file);
 });
 
 /* ---------- Ansicht: Einstellungen ---------- */
