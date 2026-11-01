@@ -301,7 +301,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 <input type="file" id="import-input" accept="application/json,.json" hidden>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pocketbase@0.21.5/dist/pocketbase.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pocketbase@0.26.8/dist/pocketbase.umd.js"></script>
 <script>
 'use strict';
 
@@ -424,6 +424,15 @@ const Sync = (() => {
   function connectClient(url) {
     pb = new window.PocketBase(url.replace(/\/+$/, ''));
     pb.autoCancellation(false);
+    // Jede Anfrage bekommt eine Zeitgrenze, damit der Abgleich nie endlos hängt
+    pb.beforeSend = (url, options) => {
+      if (!options.signal) {
+        const c = new AbortController();
+        setTimeout(() => c.abort(), 45000);
+        options.signal = c.signal;
+      }
+      return { url, options };
+    };
   }
 
   async function login(url, email, password) {
@@ -505,6 +514,7 @@ const Sync = (() => {
         }
         pending.shift();
         await DB.setMeta('queue', pending);
+        setState('syncing');
       }
       lastSync = new Date();
       setState('ok');
@@ -516,7 +526,8 @@ const Sync = (() => {
   }
 
   function handleError(e) {
-    if (e && e.status === 401) { pb.authStore.clear(); setState('login'); }
+    if (e && e.isAbort) setState('timeout');
+    else if (e && e.status === 401) { pb.authStore.clear(); setState('login'); }
     else if (e && e.status === 403) setState('rules');
     else if (!navigator.onLine || (e && e.status === 0)) setState('offline');
     else setState('error');
@@ -574,7 +585,8 @@ function syncLabel() {
   const n = Sync.pending ? (Sync.pending === 1 ? '1 Änderung wartet' : `${Sync.pending} Änderungen warten`) : '';
   switch (Sync.state) {
     case 'local': return 'Nur auf diesem Gerät';
-    case 'syncing': return 'Wird abgeglichen …';
+    case 'syncing': return Sync.pending > 1 ? `Wird abgeglichen, noch ${Sync.pending} Einträge …` : 'Wird abgeglichen …';
+    case 'timeout': return n ? `Server antwortet nicht, ${n}. Tipp auf „Jetzt abgleichen“` : 'Server antwortet nicht. Tipp auf „Jetzt abgleichen“';
     case 'ok': return n || 'Gemeinsam gespeichert';
     case 'offline': return n ? `Offline, ${n}` : 'Offline';
     case 'login': return 'Bitte neu anmelden (Einstellungen)';
