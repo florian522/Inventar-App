@@ -253,8 +253,14 @@ const Sync = (() => {
     }
   }
 
+  // Anfrage an eine eigene Server-Route (mit Anmeldung)
+  const apiGet = path => (pb && pb.authStore.isValid)
+    ? pb.send(path, { method: 'GET', requestKey: null })
+    : Promise.reject(new Error('no server'));
+
   return {
-    init, login, logout, queue, sync,
+    init, login, logout, queue, sync, apiGet,
+    get connected() { return !!(pb && pb.authStore.isValid); },
     onChange: f => listeners.add(f),
     get state() { return state; },
     get pending() { return pending.length; },
@@ -488,19 +494,39 @@ async function lookupLobid(isbn) {
   };
 }
 
+// Deutsche Nationalbibliothek: kennt jedes in Deutschland erschienene Buch, auch Pappbilderbücher.
+// Läuft über den eigenen PocketBase-Server, weil die DNB keine direkten Browser-Anfragen erlaubt.
+const dnbText = s => new DOMParser().parseFromString(String(s || ''), 'text/html').body.textContent.normalize('NFC').replace(/\s+/g, ' ').trim();
+
+async function lookupDnb(isbn) {
+  if (!Sync.connected) return null;
+  const d = await Sync.apiGet(`/api/isbn/${isbn}`);
+  if (!d || !d.found) return null;
+  let title = dnbText((d.title || [])[0]).split(' / ')[0].replace(/\s+:\s+/, ' – ');
+  const creators = (d.creator || []).map(dnbText);
+  const authors = creators.filter(c => /\[(Verfasser|Autor)/i.test(c));
+  const author = (authors.length ? authors : creators.slice(0, 2))
+    .map(c => flipName(c.replace(/\s*\[[^\]]*\]\s*/g, '').trim())).filter(Boolean).join(', ');
+  const pubRaw = dnbText((d.publisher || [])[0]);
+  const publisher = pubRaw.includes(' : ') ? pubRaw.split(' : ').pop().trim() : pubRaw;
+  const fmt = dnbText((d.format || [])[0]);
+  const pages = (fmt.match(/(\d+)\]?\s*(?:ungezählte\s+)?(?:Seiten|S\.)/) || [])[1] || '';
+  return { title, author, year: year((d.date || [])[0]), publisher, pages, description: '', cover: '' };
+}
+
 async function lookupIsbn(isbn) {
-  const res = await Promise.allSettled([lookupGoogle(isbn), lookupLobid(isbn), lookupOpenLibrary(isbn)]);
+  const res = await Promise.allSettled([lookupGoogle(isbn), lookupLobid(isbn), lookupOpenLibrary(isbn), lookupDnb(isbn)]);
   if (res.every(r => r.status === 'rejected')) throw new Error('offline');
-  const [G, L, O] = res.map(r => (r.status === 'fulfilled' ? r.value : null));
-  if (!G && !L && !O) return null;
-  const pick = (k, order = [G, L, O]) => { for (const x of order) if (x && x[k]) return x[k]; return ''; };
+  const [G, L, O, D] = res.map(r => (r.status === 'fulfilled' ? r.value : null));
+  if (!G && !L && !O && !D) return null;
+  const pick = (k, order = [G, D, L, O]) => { for (const x of order) if (x && x[k]) return x[k]; return ''; };
   const covers = [O && O.cover, G && G.cover,
     `https://portal.dnb.de/opac/mvb/cover?isbn=${isbn}`,
     `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`].filter(Boolean);
   return {
     title: pick('title'), author: pick('author'),
-    year: pick('year', [L, G, O]), publisher: pick('publisher', [L, G, O]),
-    description: pick('description'), pages: pick('pages'),
+    year: pick('year', [D, L, G, O]), publisher: pick('publisher', [D, L, G, O]),
+    description: pick('description'), pages: pick('pages', [D, G, L, O]),
     cover: covers[0], coverAlt: covers.slice(1).join('|'),
   };
 }
