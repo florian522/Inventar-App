@@ -124,6 +124,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .filter-row { display: flex; align-items: center; gap: 6px; }
 .filter-row .filters { flex: 1; min-width: 0; }
 .sort { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 14px; padding: 7px 4px; }
+.gfilter { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 12px 10px; margin: 6px 0 4px; }
+.gf-grid { display: grid; grid-template-columns: 1.15fr 1fr 1.1fr; gap: 8px; }
+.gf-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); min-width: 0; }
+.gf-grid input, .gf-grid select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); font-size: 16px; }
+.gf-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; font-size: 13px; color: var(--muted); min-height: 22px; }
+.linkbtn { border: 0; background: none; color: var(--green); font-weight: 600; font-size: 13px; padding: 2px 0; cursor: pointer; flex: none; }
+.linkbtn[hidden] { display: none; }
 
 /* Liste */
 .list { margin-top: 6px; border-top: 1px solid var(--line); }
@@ -318,6 +325,7 @@ const validId = id => /^[a-z0-9]{15}$/.test(id);
 const CATS = {
   buch: { label: 'Bücher', one: 'Buch' },
   spiel: { label: 'Spiele', one: 'Gesellschaftsspiel' },
+  puzzle: { label: 'Puzzles', one: 'Puzzle' },
   werkzeug: { label: 'Werkzeug', one: 'Werkzeug' },
   edv: { label: 'EDV', one: 'EDV-Artikel' },
   sonstiges: { label: 'Sonstiges', one: 'Gegenstand' },
@@ -339,7 +347,7 @@ const ICON = {
 
 let items = [];
 let settings = { digits: 5 };
-const listState = { q: '', cat: 'alle', sort: 'nummer', scroll: 0, ai: null };
+const listState = { q: '', cat: 'alle', sort: 'nummer', scroll: 0, ai: null, g: { age: '', players: '', dur: '' }, gHidden: 0 };
 let ai = { provider: 'openai', keys: {} };   // bleibt nur auf diesem Gerät
 const AI_PROVIDERS = {
   openai: { label: 'ChatGPT (OpenAI)', model: 'gpt-6-luna', where: 'platform.openai.com', placeholder: 'sk-…', budget: 700000 },
@@ -1057,6 +1065,8 @@ function filtered() {
   const q = listState.q.trim().toLowerCase();
   const qNum = /^\d+$/.test(q) ? parseInt(q, 10) : null;
   let list = items.filter(it => listState.cat === 'alle' || (listState.cat === 'ausgeliehen' ? !!it.loan : it.category === listState.cat));
+  listState.gHidden = 0;
+  if (listState.cat === 'spiel') list = gameFilter(list);
   if (q) {
     list = list.filter(it => {
       if (qNum !== null && it.number === qNum) return true;
@@ -1075,14 +1085,74 @@ function filtered() {
   return list;
 }
 
+// Spiele-Filter: Alter des Kindes, Anzahl Spieler, Spieldauer
+const nums = s => (String(s || '').match(/\d+/g) || []).map(Number);
+function gameFilter(list) {
+  const g = listState.g;
+  const age = parseInt(g.age, 10), pl = parseInt(g.players, 10), dur = parseInt(g.dur, 10);
+  if (!(age >= 0) && !(pl > 0) && !(dur > 0)) return list;
+  let hidden = 0;
+  const out = list.filter(it => {
+    let missing = false, ok = true;
+    if (age >= 0) {
+      const a = nums(it.age)[0];
+      if (a === undefined) missing = true; else if (a > age) ok = false;
+    }
+    if (pl > 0) {
+      const n = nums(it.players);
+      if (!n.length) missing = true;
+      else {
+        const min = n[0];
+        const max = n.length === 1 && /\+|ab|mehr/i.test(it.players) ? Infinity : n[n.length - 1];
+        if (pl < min || pl > max) ok = false;
+      }
+    }
+    if (dur > 0) {
+      const d = nums(it.duration);
+      if (!d.length) missing = true; else if (Math.max(...d) > dur) ok = false;
+    }
+    if (ok && missing) hidden++;
+    return ok && !missing;
+  });
+  listState.gHidden = hidden;
+  return out;
+}
+function gameFilterActive() {
+  const g = listState.g;
+  return !!(String(g.age).trim() || String(g.players).trim() || g.dur);
+}
+function gameFilterHtml() {
+  const g = listState.g;
+  return `<div class="gfilter">
+    <div class="gf-grid">
+      <label>Alter des Kindes<input id="gf-age" type="number" inputmode="numeric" min="0" max="99" placeholder="z. B. 8" value="${esc(g.age)}"></label>
+      <label>Spieler<input id="gf-players" type="number" inputmode="numeric" min="1" max="20" placeholder="z. B. 3" value="${esc(g.players)}"></label>
+      <label>Dauer<select id="gf-dur">${[['', 'egal'], ['15', 'bis 15 Min.'], ['30', 'bis 30 Min.'], ['45', 'bis 45 Min.'], ['60', 'bis 60 Min.'], ['90', 'bis 90 Min.']].map(([v, l]) => `<option value="${v}"${String(g.dur) === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    </div>
+    <div class="gf-foot"><span id="gf-hint"></span><button class="linkbtn" id="gf-reset"${gameFilterActive() ? '' : ' hidden'}>Zurücksetzen</button></div>
+  </div>`;
+}
+function updateGameHint(list) {
+  const el = $('#gf-hint');
+  if (!el) return;
+  const r = $('#gf-reset');
+  if (r) r.hidden = !gameFilterActive();
+  if (!gameFilterActive()) { el.textContent = 'Filtere nach Alter, Spielerzahl oder Dauer.'; return; }
+  const n = list.length;
+  const h = listState.gHidden;
+  el.textContent = `${n === 1 ? '1 Spiel passt' : `${n} Spiele passen`}${h ? ` · ${h === 1 ? '1 Spiel' : `${h} Spiele`} ohne Angabe ausgeblendet` : ''}`;
+}
+
 function subline(it) {
   if (it.category === 'buch') return [it.author, it.year].filter(Boolean).join(', ');
   if (it.category === 'spiel') return [it.publisher, it.players && `${it.players} Spieler`, it.age && `ab ${it.age}`].filter(Boolean).join(', ') || 'Gesellschaftsspiel';
+  if (it.category === 'puzzle') return [it.pieces && `${it.pieces} Teile`, it.publisher].filter(Boolean).join(', ') || 'Puzzle';
   return [it.brand, it.model].filter(Boolean).join(' ') || CATS[it.category]?.one || '';
 }
 
 function renderRows() {
   const list = filtered();
+  updateGameHint(list);
   const box = $('#rows');
   if (!items.length) {
     box.innerHTML = `<div class="empty"><h2>Noch nichts erfasst</h2><p>Tippe auf „Hinzufügen“ und fotografiere Vorder- und Rückseite eines Buches, um anzufangen.</p></div>`;
@@ -1090,7 +1160,10 @@ function renderRows() {
   }
   if (!list.length) {
     const ai = aiHtml();
-    box.innerHTML = ai + (listState.ai ? '' : `<div class="empty"><p>Nichts gefunden. Prüf die Schreibweise${ai ? ' oder lass Claude suchen' : ' oder wähle „Alle“'}.</p></div>`);
+    const gEmpty = listState.cat === 'spiel' && gameFilterActive() && !listState.q.trim();
+    box.innerHTML = ai + (listState.ai ? '' : gEmpty
+      ? `<div class="empty"><p>Kein Spiel passt zu diesen Angaben${listState.gHidden ? '. Bei manchen Spielen fehlen Alter, Spielerzahl oder Dauer, die kannst du beim Bearbeiten nachtragen' : ''}.</p></div>`
+      : `<div class="empty"><p>Nichts gefunden. Prüf die Schreibweise${ai ? ' oder lass Claude suchen' : ' oder wähle „Alle“'}.</p></div>`);
     bindAi();
     return;
   }
@@ -1129,6 +1202,20 @@ function bindAi() {
   if (cl) cl.addEventListener('click', () => { listState.ai = null; renderRows(); });
 }
 
+function bindGameFilter() {
+  const a = $('#gf-age');
+  if (!a) return;
+  a.addEventListener('input', e => { listState.g.age = e.target.value; renderRows(); });
+  $('#gf-players').addEventListener('input', e => { listState.g.players = e.target.value; renderRows(); });
+  $('#gf-dur').addEventListener('change', e => { listState.g.dur = e.target.value; renderRows(); });
+  $('#gf-reset').addEventListener('click', () => {
+    listState.g = { age: '', players: '', dur: '' };
+    $('#gf-slot').innerHTML = gameFilterHtml();
+    bindGameFilter();
+    renderRows();
+  });
+}
+
 function renderList() {
   const counts = { alle: items.length };
   Object.keys(CATS).forEach(k => counts[k] = items.filter(x => x.category === k).length);
@@ -1156,6 +1243,7 @@ function renderList() {
         <option value="neu"${listState.sort === 'neu' ? ' selected' : ''}>zuletzt erfasst</option>
       </select>
     </div>
+    <div id="gf-slot">${listState.cat === 'spiel' ? gameFilterHtml() : ''}</div>
     <div id="rows"></div>
     <nav class="bar"><div class="bar-inner">
       <button class="btn lime" id="scan-btn">${ICON.scan}Scannen</button>
@@ -1172,8 +1260,11 @@ function renderList() {
   document.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
     listState.cat = b.dataset.cat;
     document.querySelectorAll('.chip').forEach(x => x.setAttribute('aria-pressed', x === b));
+    $('#gf-slot').innerHTML = listState.cat === 'spiel' ? gameFilterHtml() : '';
+    bindGameFilter();
     renderRows();
   }));
+  bindGameFilter();
   $('#scan-btn').addEventListener('click', universalScan);
   requestAnimationFrame(() => window.scrollTo(0, listState.scroll));
 }
@@ -1187,6 +1278,8 @@ function renderDetail(id) {
     ? [['Erscheinungsjahr', it.year], ['Verlag', it.publisher], ['ISBN', it.isbn], ['Seiten', it.pages]]
     : it.category === 'spiel'
     ? [['Kategorie', 'Gesellschaftsspiel'], ['Verlag', it.publisher], ['Spieler', it.players], ['Alter', it.age ? `ab ${it.age} Jahren` : ''], ['Spieldauer', it.duration ? `${it.duration} Minuten` : '']]
+    : it.category === 'puzzle'
+    ? [['Kategorie', 'Puzzle'], ['Teile', it.pieces ? `${it.pieces} Teile` : ''], ['Hersteller', it.publisher]]
     : [['Kategorie', CATS[it.category]?.one], ['Hersteller', it.brand], ['Modell', it.model], ['Seriennummer', it.serial],
        ['Kaufdatum', it.purchaseDate ? new Date(it.purchaseDate).toLocaleDateString('de-DE') : ''], ['Kaufpreis', it.price ? `${it.price} €` : '']];
   const shown = facts.filter(f => f[1]);
@@ -1309,6 +1402,10 @@ function renderForm(id, params) {
       <div class="panel isbn">
         <button class="btn small cover-btn" data-side="front">${ICON.camera}Schachtel fotografieren und erkennen</button>
         <div class="status" id="cover-status"></div>
+      </div>` : draft.category === 'puzzle' ? `
+      <div class="panel isbn">
+        <button class="btn small cover-btn" data-side="front">${ICON.camera}Puzzle fotografieren und erkennen</button>
+        <div class="status" id="cover-status"></div>
       </div>` : ''}
 
       <div class="panel">
@@ -1333,6 +1430,9 @@ function renderForm(id, params) {
         <div class="grid2">${field('players', 'Spieler (z. B. 2–4)')}${field('age', 'Alter ab', { attrs: 'inputmode="numeric"' })}</div>
         ${field('duration', 'Spieldauer (Minuten)', { attrs: 'inputmode="numeric"' })}
         ${field('description', 'Beschreibung', { type: 'textarea' })}
+      ` : draft.category === 'puzzle' ? `
+        ${field('title', 'Titel oder Motiv')}
+        <div class="grid2">${field('pieces', 'Anzahl Teile', { attrs: 'inputmode="numeric"' })}${field('publisher', 'Hersteller')}</div>
       ` : `
         ${field('title', 'Bezeichnung')}
         <div class="grid2">${field('brand', 'Hersteller')}${field('model', 'Modell')}</div>
@@ -1475,13 +1575,19 @@ async function resizeImage(file, max = 1000) {
 let coverSide = 'front';
 
 function coverPrompt(cat, side) {
-  if (cat !== 'spiel' && side === 'back') return `Das Foto zeigt die Rückseite eines Buches, oft ein deutsches Kinder- oder Fachbuch. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer.
+  if (cat === 'buch' && side === 'back') return `Das Foto zeigt die Rückseite eines Buches, oft ein deutsches Kinder- oder Fachbuch. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer.
 - beschreibung: Gib den Klappentext bzw. die Inhaltsbeschreibung wieder, möglichst wörtlich, bei langen Texten auf höchstens 5 Sätze gekürzt. Lass Werbung, Pressestimmen, Preise und Altersangaben weg.
 - isbn: die ISBN, meist über oder unter dem Strichcode (beginnt mit 978 oder 979), ohne Bindestriche.
 - verlag, jahr: nur wenn sie auf der Rückseite stehen. Titel und Autor brauchst du nicht, Überschriften auf der Rückseite sind oft nicht der Buchtitel.
 - inventarnummer: Auf der Rückseite klebt meist ein eigener Inventaraufkleber (ein aufgeklebtes Etikett mit QR-Code und einer aufgedruckten Nummer, oft mit führenden Nullen wie 0042). Gib genau diese Nummer an, so wie sie aufgedruckt ist, mit führenden Nullen. Nicht die ISBN, nicht die Ziffern unter dem Strichcode, keinen Preis und keine Bibliotheks- oder Verlagsnummer. Ist kein solcher Aufkleber zu sehen oder die Nummer nicht sicher lesbar, bleibt das Feld leer.
 Antworte nur mit JSON, ohne weiteren Text:
 {"titel":"","autor":"","verlag":"","jahr":"","beschreibung":"","isbn":"","inventarnummer":""}`;
+  if (cat === 'puzzle') return `Das Foto zeigt ein Puzzle, meist die Schachtel. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer.
+- titel: der Name des Puzzles oder, wenn keiner draufsteht, eine kurze Beschreibung des Motivs (z. B. „Bauernhof mit Tieren“).
+- teile: die Anzahl der Teile als Zahl, nur wenn sie auf der Schachtel steht.
+- hersteller: z. B. Ravensburger, Schmidt, Clementoni, nur wenn erkennbar.
+Antworte nur mit JSON, ohne weiteren Text:
+{"titel":"","teile":"","hersteller":""}`;
   if (cat === 'spiel') return `Das Foto zeigt die Schachtel eines Gesellschaftsspiels. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer. Eine kurze Beschreibung (höchstens 2 Sätze) nur, wenn sie auf der Schachtel steht oder du das Spiel sicher kennst.
 Antworte nur mit JSON, ohne weiteren Text:
 {"titel":"","verlag":"","spieler":"z. B. 2–4","alter":"nur Zahl","dauer":"Minuten als Zahl","beschreibung":""}`;
@@ -1495,7 +1601,7 @@ async function coverRecognize(file, side) {
   const setStatus = (cls, txt) => { const el = $('#cover-status'); if (el) { el.className = 'status ' + cls; el.textContent = txt; } };
   let img;
   try { img = await resizeImage(file, 1000); } catch { setStatus('err', 'Das Foto konnte nicht gelesen werden.'); return; }
-  const back = side === 'back' && draft.category !== 'spiel';
+  const back = side === 'back' && draft.category === 'buch';
   if (!back) draft.photo = img;   // Nur die Vorderseite wird zum Cover
   if (window.PREVIEW) { rerenderForm(); setStatus('err', AI_ERRORS.preview); return; }
   if (status) { status.className = 'status'; status.textContent = back ? 'Lese die Rückseite …' : 'Lese das Cover …'; }
@@ -1504,6 +1610,8 @@ async function coverRecognize(file, side) {
     const r = await aiComplete(coverPrompt(draft.category, back ? 'back' : 'front'), img);
     const map = draft.category === 'spiel'
       ? { titel: 'title', verlag: 'publisher', spieler: 'players', alter: 'age', dauer: 'duration', beschreibung: 'description' }
+      : draft.category === 'puzzle'
+      ? { titel: 'title', teile: 'pieces', hersteller: 'publisher' }
       : { titel: 'title', autor: 'author', verlag: 'publisher', jahr: 'year', beschreibung: 'description' };
     let n = 0;
     for (const [from, to] of Object.entries(map)) {
@@ -1525,7 +1633,7 @@ async function coverRecognize(file, side) {
     rerenderForm();
     const hint = back
       ? (draft.photo ? '' : ' Für das Cover fotografierst du noch die Vorderseite.')
-      : (draft.description && draft.number != null ? '' : ' Für Inhalt und Inventarnummer fotografierst du noch die Rückseite.');
+      : (draft.category !== 'buch' || (draft.description && draft.number != null) ? '' : ' Für Inhalt und Inventarnummer fotografierst du noch die Rückseite.');
     const numInfo = back && draft.category === 'buch' && !numNew && (draft.number === null || draft.number === undefined) ? ' Den Inventaraufkleber habe ich nicht erkannt, trag die Nummer bitte von Hand ein.' : '';
     setStatus(n ? 'ok' : 'err', n
       ? `${back ? 'Von der Rückseite' : 'Vom Cover'} übernommen${numNew ? `, inklusive Inventarnummer ${fmtNum(draft.number)}` : ''}. Bitte kurz prüfen.${numInfo}${hint}`
@@ -1649,6 +1757,7 @@ function pdfFooterSvg() {
 function pdfFacts(it) {
   if (it.category === 'buch') return [['Verlag', it.publisher], ['Erschienen', it.year], ['Seiten', it.pages], ['ISBN', it.isbn]];
   if (it.category === 'spiel') return [['Verlag', it.publisher], ['Spieler', it.players], ['Alter', it.age ? `ab ${it.age} Jahren` : ''], ['Spieldauer', it.duration ? `${it.duration} Minuten` : '']];
+  if (it.category === 'puzzle') return [['Teile', it.pieces ? `${it.pieces} Teile` : ''], ['Hersteller', it.publisher]];
   return [['Hersteller', it.brand], ['Modell', it.model]];
 }
 
@@ -1761,7 +1870,7 @@ async function makeItemPdf(it) {
   if (ty + 14 <= bottom + 6) {
     const msg = it.loan
       ? 'Gerade ausgeliehen – sprich mich gern an, dann melde ich mich, sobald es zurück ist.'
-      : `Interesse an ${book ? 'diesem Buch' : it.category === 'spiel' ? 'diesem Spiel' : 'diesem Eintrag'}? Sprich mich einfach an.`;
+      : `Interesse an ${book ? 'diesem Buch' : it.category === 'spiel' ? 'diesem Spiel' : it.category === 'puzzle' ? 'diesem Puzzle' : 'diesem Eintrag'}? Sprich mich einfach an.`;
     const by = Math.max(ty, desc ? ty : bottom - 6);
     doc.setFillColor(PDF_C.soft); doc.roundedRect(16, by, 178, 13, 4, 4, 'F');
     doc.setFillColor(PDF_C.turq); doc.circle(24, by + 6.5, 2.2, 'F');
@@ -1839,7 +1948,7 @@ function toCsv() {
   const cols = [['Nummer', it => fmtNum(it.number)], ['Kategorie', it => CATS[it.category]?.one || ''], ['Titel', it => it.title],
     ['Autor', it => it.author], ['Jahr', it => it.year], ['Verlag', it => it.publisher], ['ISBN', it => it.isbn],
     ['Hersteller', it => it.brand], ['Modell', it => it.model], ['Seriennummer', it => it.serial],
-    ['Kaufdatum', it => it.purchaseDate], ['Kaufpreis', it => it.price], ['Spieler', it => it.players], ['Alter ab', it => it.age], ['Notizen', it => it.notes],
+    ['Kaufdatum', it => it.purchaseDate], ['Kaufpreis', it => it.price], ['Spieler', it => it.players], ['Alter ab', it => it.age], ['Teile', it => it.pieces], ['Notizen', it => it.notes],
     ['Ausgeliehen an', it => it.loan ? it.loan.name : ''], ['Ausgeliehen seit', it => it.loan ? fmtDate(it.loan.since) : '']];
   const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const sorted = [...items].sort((a, b) => (a.number ?? 1e9) - (b.number ?? 1e9));
