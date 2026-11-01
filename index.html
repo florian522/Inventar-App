@@ -1380,7 +1380,7 @@ function renderForm(id, params) {
     const aiOk = window.PREVIEW || aiKeyNow();
     if (hasTitle && !clash && aiOk) {
       nextCover = { at: Date.now() };
-      coverSide = 'back';
+      coverSide = 'front';
       $('#cover-input').click();
     }
     submit(true);
@@ -1390,13 +1390,13 @@ function renderForm(id, params) {
   flushNextCover();
 }
 
-// Foto der nächsten Rückseite, das schon beim Speichern aufgenommen wurde
+// Foto der nächsten Vorderseite, das schon beim Speichern aufgenommen wurde
 let nextCover = null;
 function flushNextCover() {
   if (!nextCover || !nextCover.file || !draft || draft.createdAt < nextCover.at || !$('#cover-status')) return;
   const f = nextCover.file;
   nextCover = null;
-  coverRecognize(f, 'back');
+  coverRecognize(f, 'front');
 }
 
 function showNumberStatus() {
@@ -1478,7 +1478,7 @@ function coverPrompt(cat, side) {
   if (cat !== 'spiel' && side === 'back') return `Das Foto zeigt die Rückseite eines Buches, oft ein deutsches Kinder- oder Fachbuch. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer.
 - beschreibung: Gib den Klappentext bzw. die Inhaltsbeschreibung wieder, möglichst wörtlich, bei langen Texten auf höchstens 5 Sätze gekürzt. Lass Werbung, Pressestimmen, Preise und Altersangaben weg.
 - isbn: die ISBN, meist über oder unter dem Strichcode (beginnt mit 978 oder 979), ohne Bindestriche.
-- titel, autor, verlag, jahr: nur wenn sie auf der Rückseite stehen.
+- verlag, jahr: nur wenn sie auf der Rückseite stehen. Titel und Autor brauchst du nicht, Überschriften auf der Rückseite sind oft nicht der Buchtitel.
 - inventarnummer: Auf der Rückseite klebt meist ein eigener Inventaraufkleber (ein aufgeklebtes Etikett mit QR-Code und einer aufgedruckten Nummer, oft mit führenden Nullen wie 0042). Gib genau diese Nummer an, so wie sie aufgedruckt ist, mit führenden Nullen. Nicht die ISBN, nicht die Ziffern unter dem Strichcode, keinen Preis und keine Bibliotheks- oder Verlagsnummer. Ist kein solcher Aufkleber zu sehen oder die Nummer nicht sicher lesbar, bleibt das Feld leer.
 Antworte nur mit JSON, ohne weiteren Text:
 {"titel":"","autor":"","verlag":"","jahr":"","beschreibung":"","isbn":"","inventarnummer":""}`;
@@ -1507,6 +1507,8 @@ async function coverRecognize(file, side) {
       : { titel: 'title', autor: 'author', verlag: 'publisher', jahr: 'year', beschreibung: 'description' };
     let n = 0;
     for (const [from, to] of Object.entries(map)) {
+      // Titel und Autor kommen bei Büchern nur von der Vorderseite: Überschriften auf der Rückseite sind oft nicht der Buchtitel
+      if (back && draft.category === 'buch' && (to === 'title' || to === 'author')) continue;
       const v = r && r[from] != null ? String(r[from]).trim() : '';
       if (v && !String(draft[to] || '').trim()) { draft[to] = v; n++; }
     }
