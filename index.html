@@ -1581,7 +1581,7 @@ let coverSide = 'front';
 function coverPrompt(cat, side) {
   if (cat === 'buch' && side === 'back') return `Das Foto zeigt die Rückseite eines Buches, oft ein deutsches Kinder- oder Fachbuch. Lies die sichtbaren Angaben ab. Erfinde nichts: Was nicht erkennbar ist, bleibt leer.
 - beschreibung: Gib den Klappentext bzw. die Inhaltsbeschreibung wieder, möglichst wörtlich, bei langen Texten auf höchstens 5 Sätze gekürzt. Lass Werbung, Pressestimmen, Preise und Altersangaben weg.
-- isbn: die ISBN, meist über oder unter dem Strichcode (beginnt mit 978 oder 979), ohne Bindestriche.
+- isbn: die ISBN, meist über oder unter dem Strichcode (beginnt mit 978 oder 979), ohne Bindestriche. Die Ziffern direkt unter dem Strichcode sind ebenfalls die ISBN-13 und gelten, auch wenn kein „ISBN“ davorsteht. Lies jede Ziffer sorgfältig einzeln ab.
 - verlag, jahr: nur wenn sie auf der Rückseite stehen. Titel und Autor brauchst du nicht, Überschriften auf der Rückseite sind oft nicht der Buchtitel.
 - inventarnummer: Auf der Rückseite klebt meist ein eigener Inventaraufkleber (ein aufgeklebtes Etikett mit QR-Code und einer aufgedruckten Nummer, oft mit führenden Nullen wie 0042). Gib genau diese Nummer an, so wie sie aufgedruckt ist, mit führenden Nullen. Nicht die ISBN, nicht die Ziffern unter dem Strichcode, keinen Preis und keine Bibliotheks- oder Verlagsnummer. Ist kein solcher Aufkleber zu sehen oder die Nummer nicht sicher lesbar, bleibt das Feld leer.
 Antworte nur mit JSON, ohne weiteren Text:
@@ -1604,7 +1604,7 @@ async function coverRecognize(file, side) {
   const status = $('#cover-status');
   const setStatus = (cls, txt) => { const el = $('#cover-status'); if (el) { el.className = 'status ' + cls; el.textContent = txt; } };
   let img;
-  try { img = await resizeImage(file, 1000); } catch { setStatus('err', 'Das Foto konnte nicht gelesen werden.'); return; }
+  try { img = await resizeImage(file, side === 'back' && draft.category === 'buch' ? 1600 : 1000); } catch { setStatus('err', 'Das Foto konnte nicht gelesen werden.'); return; }
   const back = side === 'back' && draft.category === 'buch';
   if (!back) draft.photo = img;   // Nur die Vorderseite wird zum Cover
   if (window.PREVIEW) { rerenderForm(); setStatus('err', AI_ERRORS.preview); return; }
@@ -1624,10 +1624,11 @@ async function coverRecognize(file, side) {
       const v = r && r[from] != null ? String(r[from]).trim() : '';
       if (v && !String(draft[to] || '').trim()) { draft[to] = v; n++; }
     }
-    let isbnNew = false;
-    if (draft.category === 'buch' && r && r.isbn && !draft.isbn) {
+    let isbnNew = false, isbnCheck = false;
+    if (draft.category === 'buch' && r && r.isbn && !String(draft.isbn || '').trim()) {
       const c = cleanIsbn(r.isbn);
       if (validIsbn(c)) { draft.isbn = toIsbn13(c); isbnNew = true; n++; }
+      else if (/^97[89]\d{10}$/.test(c) || /^\d{9}[\dX]$/.test(c)) { draft.isbn = c; isbnNew = true; isbnCheck = true; n++; }
     }
     let numNew = false;
     if (back && r && r.inventarnummer != null && (draft.number === null || draft.number === undefined)) {
@@ -1640,7 +1641,7 @@ async function coverRecognize(file, side) {
       : (draft.category !== 'buch' || (draft.description && draft.number != null) ? '' : ' Für Inhalt und Inventarnummer fotografierst du noch die Rückseite.');
     const numInfo = back && draft.category === 'buch' && !numNew && (draft.number === null || draft.number === undefined) ? ' Den Inventaraufkleber habe ich nicht erkannt, trag die Nummer bitte von Hand ein.' : '';
     setStatus(n ? 'ok' : 'err', n
-      ? `${back ? 'Von der Rückseite' : 'Vom Cover'} übernommen${numNew ? `, inklusive Inventarnummer ${fmtNum(draft.number)}` : ''}. Bitte kurz prüfen.${numInfo}${hint}`
+      ? `${back ? 'Von der Rückseite' : 'Vom Cover'} übernommen${[isbnNew && `ISBN ${draft.isbn}`, numNew && `Inventarnummer ${fmtNum(draft.number)}`].filter(Boolean).length ? `, inklusive ${[isbnNew && `ISBN ${draft.isbn}`, numNew && `Inventarnummer ${fmtNum(draft.number)}`].filter(Boolean).join(' und ')}` : ''}. Bitte kurz prüfen.${isbnCheck ? ' Bei der ISBN passt die Prüfziffer nicht, vermutlich ist eine Ziffer falsch gelesen. Bitte mit dem Buch vergleichen.' : ''}${back && draft.category === 'buch' && !draft.isbn ? ' Die ISBN war nicht lesbar, trag sie bitte von Hand ein.' : ''}${numInfo}${hint}`
       : 'Auf dem Foto war nichts Lesbares. Versuch es noch einmal ohne Spiegelung.');
   } catch (e) {
     rerenderForm();
