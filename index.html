@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Inventar</title>
+<title>Inventar – Vorschau</title>
 <meta name="theme-color" content="#F6F8EC" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0F1918" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -282,6 +282,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 </style>
 </head>
 <body>
+<div class="preview-note">Vorschau mit Beispieldaten. Cover-Erkennung und gemeinsamer Speicher funktionieren erst in deiner eigenen App.</div>
 <main id="view"></main>
 
 <div id="scanner" hidden>
@@ -308,7 +309,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 <input type="file" id="import-input" accept="application/json,.json" hidden>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pocketbase@0.26.8/dist/pocketbase.umd.js"></script>
+<script>window.PREVIEW = true;</script>
 <script>
 'use strict';
 
@@ -1070,6 +1071,8 @@ function filtered() {
   if (q) {
     list = list.filter(it => {
       if (qNum !== null && it.number === qNum) return true;
+      const qIsbn = cleanIsbn(q);
+      if (it.isbn && qIsbn.length >= 4 && /^[0-9\s-]+x?$/i.test(q) && cleanIsbn(it.isbn).includes(qIsbn)) return true;
       return [it.title, it.author, it.publisher, it.isbn, it.description, it.brand, it.model, it.serial, it.location, it.notes, fmtNum(it.number), it.loan && it.loan.name]
         .some(v => v && String(v).toLowerCase().includes(q));
     });
@@ -1144,7 +1147,7 @@ function updateGameHint(list) {
 }
 
 function subline(it) {
-  if (it.category === 'buch') return [it.author, it.year].filter(Boolean).join(', ');
+  if (it.category === 'buch') return [[it.author, it.year].filter(Boolean).join(', '), it.isbn && `ISBN ${it.isbn}`].filter(Boolean).join(' · ');
   if (it.category === 'spiel') return [it.publisher, it.players && `${it.players} Spieler`, it.age && `ab ${it.age}`].filter(Boolean).join(', ') || 'Gesellschaftsspiel';
   if (it.category === 'puzzle') return [it.pieces && `${it.pieces} Teile`, it.publisher].filter(Boolean).join(', ') || 'Puzzle';
   return [it.brand, it.model].filter(Boolean).join(' ') || CATS[it.category]?.one || '';
@@ -1423,6 +1426,7 @@ function renderForm(id, params) {
         ${field('author', 'Autor')}
         <div class="grid2">${field('year', 'Erscheinungsjahr', { attrs: 'inputmode="numeric"' })}${field('pages', 'Seiten', { attrs: 'inputmode="numeric"' })}</div>
         ${field('publisher', 'Verlag')}
+        ${field('isbn', 'ISBN', { attrs: 'inputmode="numeric"' })}
         ${field('description', 'Inhalt', { type: 'textarea' })}
       ` : draft.category === 'spiel' ? `
         ${field('title', 'Titel')}
